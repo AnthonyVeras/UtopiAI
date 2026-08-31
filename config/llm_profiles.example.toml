@@ -1,0 +1,19 @@
+[profiles.chat]
+model = "openrouter/model-slug"
+api_key_env = "CHAT_LLM_API_KEY"
+context_window = 32768
+max_output_tokens = 1200
+temperature = 0.9
+timeout_seconds = 90
+supports_tools = "auto"
+
+[profiles.dream]
+model = "openai-compatible/model-slug"
+api_base = "https://endpoint.example/v1"
+api_key_env = "DREAM_LLM_API_KEY"
+context_window = 32768
+max_output_tokens = 2000
+temperature = 0.2
+timeout_seconds = 120
+supports_tools = false
+
