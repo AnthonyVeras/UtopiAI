@@ -1,0 +1,77 @@
+name: utopiai
+
+x-app: &app
+  build: .
+  env_file:
+    - path: .env
+      required: false
+  volumes:
+    - ./config:/app/config:ro
+    - cards:/data/cards
+    - vaults:/data/vaults
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: utopiai
+      POSTGRES_USER: utopiai
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?configure POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U utopiai -d utopiai"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  migrate:
+    <<: *app
+    command: ["uv", "run", "alembic", "upgrade", "head"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  bot:
+    <<: *app
+    command: ["uv", "run", "utopiai-bot"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    <<: *app
+    command: ["uv", "run", "utopiai-worker"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  backup:
+    image: postgres:17-alpine
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      PGHOST: postgres
+      PGDATABASE: utopiai
+      PGUSER: utopiai
+      PGPASSWORD: ${POSTGRES_PASSWORD:?configure POSTGRES_PASSWORD}
+    volumes:
+      - ./scripts/backup.sh:/usr/local/bin/backup.sh:ro
+      - backups:/backups
+      - cards:/data/cards:ro
+      - ./config:/data/config:ro
+    command: ["sh", "/usr/local/bin/backup.sh", "loop"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  cards:
+  vaults:
+  backups:

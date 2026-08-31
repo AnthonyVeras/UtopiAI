@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: utopiai_test
+          POSTGRES_USER: utopiai
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U utopiai -d utopiai_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://utopiai:test@localhost:5432/utopiai_test
+      DATABASE_URL: postgresql+psycopg://utopiai:test@localhost:5432/utopiai_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+          enable-cache: true
+      - run: uv sync --frozen --dev
+      - run: uv run ruff format --check .
+      - run: uv run ruff check .
+      - run: uv run alembic upgrade head
+      - run: uv run alembic check
+      - run: uv run pytest -q
+      - run: cp .env.example .env
+      - run: docker compose config
+        env:
+          POSTGRES_PASSWORD: ci-only
