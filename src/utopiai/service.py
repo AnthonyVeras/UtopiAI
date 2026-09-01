@@ -141,7 +141,7 @@ class ConversationService:
     async def import_character(
         self, telegram_id: int, chat_id: int, filename: str, blob: bytes
     ) -> tuple[Character, NormalizedCard, uuid.UUID | None]:
-        card = load_card(blob, filename)
+        card = await asyncio.to_thread(load_card, blob, filename)
         async with self.sessions.begin() as session:
             user, persona = await self.ensure_identity(session, telegram_id)
             await session.execute(
