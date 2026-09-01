@@ -4,6 +4,11 @@ Formato baseado em Keep a Changelog. O projeto ainda não possui licença públi
 
 ## [Unreleased]
 
+### Security
+
+- Fixado `character-card` em um commit revisado, evitando atualização implícita de supply-chain.
+- Isolado o parsing de PNG não confiável em subprocesso com timeout e limites de entrada/saída.
+
 ### Added
 
 - Monólito modular com adaptador Telegram, LiteLLM e PostgreSQL.
@@ -12,4 +17,3 @@ Formato baseado em Keep a Changelog. O projeto ainda não possui licença públi
 - Ledger auditável, memória imediata, forget, supersede e projeções Markdown.
 - Dream worker com watermark, evidência, retries, locks e alusões pós-entrega.
 - Docker Compose, backup diário, migração Alembic e suíte de avaliação com 27 cenários.
-

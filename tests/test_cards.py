@@ -1,5 +1,6 @@
 import io
 import json
+import subprocess
 
 import pytest
 from character_card import embed_card_in_png
@@ -62,3 +63,27 @@ def test_rejects_bad_extension_and_size():
         load_card(b"{}", "card.txt")
     with pytest.raises(CardError):
         load_card(b"x" * (10 * 1024 * 1024 + 1), "card.json")
+
+
+def test_rejects_truncated_png_as_card_error():
+    truncated = b"\x89PNG\r\n\x1a\n\x00\x00\x00\x20tEXtbroken"
+    with pytest.raises(CardError, match="Card PNG invalido"):
+        load_card(truncated, "broken.png")
+
+
+def test_checks_size_before_starting_png_parser(monkeypatch):
+    def parser_must_not_run(*args, **kwargs):
+        pytest.fail("parser executado antes da verificacao de tamanho")
+
+    monkeypatch.setattr("utopiai.cards.subprocess.run", parser_must_not_run)
+    with pytest.raises(CardError, match="entre 1 byte e 10 MB"):
+        load_card(b"x" * (10 * 1024 * 1024 + 1), "oversized.png")
+
+
+def test_converts_png_parser_timeout_to_card_error(monkeypatch):
+    def timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired("parser", 5)
+
+    monkeypatch.setattr("utopiai.cards.subprocess.run", timeout)
+    with pytest.raises(CardError, match="excedeu o limite de tempo"):
+        load_card(b"\x89PNG\r\n\x1a\n", "slow.png")

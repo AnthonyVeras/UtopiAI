@@ -28,6 +28,19 @@ apagados separadamente para uma eliminação imediata completa.
 - Markdown é exportável e deve herdar as permissões do volume/host.
 - O estado temporário da confirmação de exclusão vive no processo do bot e some após restart.
 
+## Dependências de baixa maturidade
+
+`character-card` é fixada no commit
+`8ec6a90140f1df6a4b8edbc5e78e2305841e1978`. A biblioteca tem poucos commits e mantenedor único;
+portanto, nunca deve ser atualizada automaticamente. Antes de cada atualização, revise manualmente
+o diff, em especial `png_chunks.py`, `decoders.py` e os parsers, execute todos os fixtures e fixe o
+novo hash somente depois da aprovação.
+
+Na revisão de 2026-09-01, `png_chunks.py` mostrou parsing linear e slices limitados pela entrada,
+mas não valida CRC e usa descompressão zlib sem limite de saída. Por isso, o UtopiAI rejeita cards
+acima de 10 MB antes de decodificar e processa PNG em subprocesso descartável, com timeout de cinco
+segundos e payload serializado limitado a 10 MB. Falha, timeout ou término anormal do subprocesso
+vira `CardError` e não encerra o bot.
+
 Antes de beta multiusuário: criptografia/segregação de backup, política de retenção, backup externo,
 revisão LGPD, rate limit e testes de autorização negativos.
-

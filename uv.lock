@@ -201,7 +201,7 @@ wheels = [
 [[package]]
 name = "character-card"
 version = "0.1.0"
-source = { git = "https://github.com/roleplay-studio/character-card.git#8ec6a90140f1df6a4b8edbc5e78e2305841e1978" }
+source = { git = "https://github.com/roleplay-studio/character-card.git?rev=8ec6a90140f1df6a4b8edbc5e78e2305841e1978#8ec6a90140f1df6a4b8edbc5e78e2305841e1978" }
 dependencies = [
     { name = "pillow" },
 ]
@@ -1616,7 +1616,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "alembic", specifier = ">=1.16,<2" },
-    { name = "character-card", git = "https://github.com/roleplay-studio/character-card.git" },
+    { name = "character-card", git = "https://github.com/roleplay-studio/character-card.git?rev=8ec6a90140f1df6a4b8edbc5e78e2305841e1978" },
     { name = "litellm", specifier = ">=1.70,<2" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2,<4" },
     { name = "python-telegram-bot", specifier = ">=22,<23" },

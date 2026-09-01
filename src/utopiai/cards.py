@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +15,8 @@ from character_card.decoders import decode_payload
 from character_card.png_chunks import find_text_value, scan_png_chunks
 
 MAX_CARD_BYTES = 10 * 1024 * 1024
+MAX_CARD_PAYLOAD_BYTES = 10 * 1024 * 1024
+CARD_PARSE_TIMEOUT_SECONDS = 5
 
 
 class CardError(ValueError):
@@ -81,6 +85,51 @@ def normalize_card(payload: dict[str, Any], original_format: str) -> NormalizedC
     )
 
 
+def _parse_png_payload(blob: bytes) -> dict[str, Any]:
+    parsed = parse_character_card(blob, ".png")
+    chunks = scan_png_chunks(blob)
+    raw = find_text_value(chunks, "ccv3") or find_text_value(chunks, "chara")
+    payload = decode_payload(raw) if raw else None
+    if payload is not None:
+        return payload
+    return {
+        "name": parsed.name,
+        "description": parsed.description,
+        "personality": parsed.personality,
+        "scenario": parsed.scenario,
+        "first_mes": parsed.first_message,
+        "alternate_greetings": parsed.alternate_greetings,
+        "mes_example": parsed.mes_example,
+        "system_prompt": parsed.system_prompt,
+        "post_history_instructions": parsed.post_history_instructions,
+        "character_book": parsed.character_book,
+    }
+
+
+def _parse_png_isolated(blob: bytes) -> dict[str, Any]:
+    try:
+        result = subprocess.run(
+            [sys.executable, "-I", "-m", "utopiai.cards", "--parse-png"],
+            input=blob,
+            capture_output=True,
+            timeout=CARD_PARSE_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise CardError("O parsing do card PNG excedeu o limite de tempo") from exc
+    except Exception as exc:
+        raise CardError("Nao foi possivel iniciar o parser isolado do card PNG") from exc
+    if result.returncode or not result.stdout or len(result.stdout) > MAX_CARD_PAYLOAD_BYTES:
+        raise CardError("Card PNG invalido ou complexo demais")
+    try:
+        payload = json.loads(result.stdout)
+    except Exception as exc:
+        raise CardError("O parser do card PNG retornou um payload invalido") from exc
+    if not isinstance(payload, dict):
+        raise CardError("Payload do card nao e um objeto JSON")
+    return payload
+
+
 def load_card(blob: bytes, filename: str) -> NormalizedCard:
     if not blob or len(blob) > MAX_CARD_BYTES:
         raise CardError("O card deve ter entre 1 byte e 10 MB")
@@ -88,26 +137,8 @@ def load_card(blob: bytes, filename: str) -> NormalizedCard:
     try:
         if suffix == ".json":
             payload = json.loads(blob)
-            card_format = "json"
         elif suffix == ".png":
-            parsed = parse_character_card(blob, suffix)
-            chunks = scan_png_chunks(blob)
-            raw = find_text_value(chunks, "ccv3") or find_text_value(chunks, "chara")
-            payload = decode_payload(raw) if raw else None
-            if payload is None:
-                payload = {
-                    "name": parsed.name,
-                    "description": parsed.description,
-                    "personality": parsed.personality,
-                    "scenario": parsed.scenario,
-                    "first_mes": parsed.first_message,
-                    "alternate_greetings": parsed.alternate_greetings,
-                    "mes_example": parsed.mes_example,
-                    "system_prompt": parsed.system_prompt,
-                    "post_history_instructions": parsed.post_history_instructions,
-                    "character_book": parsed.character_book,
-                }
-            card_format = "png"
+            payload = _parse_png_isolated(blob)
         else:
             raise CardError("Envie um arquivo .json ou .png")
     except CardError:
@@ -116,7 +147,22 @@ def load_card(blob: bytes, filename: str) -> NormalizedCard:
         raise CardError(f"Card invalido: {exc}") from exc
     if not isinstance(payload, dict):
         raise CardError("Payload do card nao e um objeto JSON")
-    return normalize_card(payload, card_format)
+    return normalize_card(payload, suffix.removeprefix("."))
+
+
+def _png_parser_main() -> int:
+    try:
+        blob = sys.stdin.buffer.read(MAX_CARD_BYTES + 1)
+        if not blob or len(blob) > MAX_CARD_BYTES:
+            raise CardError("Tamanho de card invalido")
+        encoded = json.dumps(_parse_png_payload(blob), ensure_ascii=False).encode("utf-8")
+        if len(encoded) > MAX_CARD_PAYLOAD_BYTES:
+            raise CardError("Payload de card acima do limite")
+        sys.stdout.buffer.write(encoded)
+        return 0
+    except BaseException as exc:
+        sys.stderr.write(type(exc).__name__)
+        return 1
 
 
 def safe_filename(name: str) -> str:
@@ -143,3 +189,7 @@ def store_original(blob: bytes, filename: str, cards_dir: Path, character_id: st
 
 def normalized_json(card: NormalizedCard) -> bytes:
     return json.dumps(card.payload, ensure_ascii=False, indent=2).encode("utf-8")
+
+
+if __name__ == "__main__" and "--parse-png" in sys.argv:
+    raise SystemExit(_png_parser_main())
