@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -39,6 +40,7 @@ class NormalizedCard:
     original_payload: dict[str, Any]
     original_format: str
     compatibility_warnings: list[str]
+    avatar_data: bytes | None = None  # raw image bytes, if extracted
 
 
 def _runtime_data(payload: dict[str, Any]) -> dict[str, Any]:
@@ -134,11 +136,14 @@ def load_card(blob: bytes, filename: str) -> NormalizedCard:
     if not blob or len(blob) > MAX_CARD_BYTES:
         raise CardError("O card deve ter entre 1 byte e 10 MB")
     suffix = Path(filename).suffix.lower()
+    avatar_data: bytes | None = None
     try:
         if suffix == ".json":
             payload = json.loads(blob)
+            avatar_data = _extract_avatar_json(payload)
         elif suffix == ".png":
             payload = _parse_png_isolated(blob)
+            avatar_data = blob  # the PNG itself is the avatar
         else:
             raise CardError("Envie um arquivo .json ou .png")
     except CardError:
@@ -147,7 +152,44 @@ def load_card(blob: bytes, filename: str) -> NormalizedCard:
         raise CardError(f"Card invalido: {exc}") from exc
     if not isinstance(payload, dict):
         raise CardError("Payload do card nao e um objeto JSON")
-    return normalize_card(payload, suffix.removeprefix("."))
+    card = normalize_card(payload, suffix.removeprefix("."))
+    return NormalizedCard(
+        name=card.name,
+        description=card.description,
+        personality=card.personality,
+        scenario=card.scenario,
+        first_mes=card.first_mes,
+        alternate_greetings=card.alternate_greetings,
+        mes_example=card.mes_example,
+        system_prompt=card.system_prompt,
+        post_history_instructions=card.post_history_instructions,
+        lorebook=card.lorebook,
+        payload=card.payload,
+        original_payload=card.original_payload,
+        original_format=card.original_format,
+        compatibility_warnings=card.compatibility_warnings,
+        avatar_data=avatar_data,
+    )
+
+
+def _extract_avatar_json(payload: dict[str, Any]) -> bytes | None:
+    """Try to find base64-encoded avatar in JSON card."""
+    data = payload.get("data", payload)
+    raw = data.get("avatar")
+    if not raw or not isinstance(raw, str):
+        # Also check extensions
+        extensions = data.get("extensions", {})
+        if isinstance(extensions, dict):
+            raw = extensions.get("avatar")
+    if raw and isinstance(raw, str) and len(raw) > 20:
+        # Strip data URI prefix if present
+        if "," in raw[:64]:
+            raw = raw.split(",", 1)[1]
+        try:
+            return base64.b64decode(raw)
+        except Exception:
+            pass
+    return None
 
 
 def _png_parser_main() -> int:

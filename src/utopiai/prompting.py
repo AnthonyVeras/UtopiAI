@@ -29,6 +29,48 @@ REMEMBER_TOOL = {
     },
 }
 
+SEND_IMAGE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "enviar_imagem",
+        "description": "Envia uma imagem ao usuario. Descreva a cena em detalhe para geracao.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "descricao": {
+                    "type": "string",
+                    "minLength": 10,
+                    "maxLength": 2000,
+                    "description": "Descricao detalhada da imagem a ser gerada.",
+                },
+            },
+            "required": ["descricao"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+SEND_AUDIO_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "enviar_audio",
+        "description": "Envia uma mensagem de voz ao usuario.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "texto": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4000,
+                    "description": "Texto a ser falado na voz do personagem.",
+                },
+            },
+            "required": ["texto"],
+            "additionalProperties": False,
+        },
+    },
+}
+
 
 @dataclass(frozen=True)
 class PromptMemory:

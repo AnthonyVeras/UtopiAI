@@ -6,6 +6,8 @@ max_output_tokens = 1200
 temperature = 0.9
 timeout_seconds = 90
 supports_tools = "auto"
+supports_vision = false
+supports_audio_input = false
 
 [profiles.dream]
 model = "openai-compatible/model-slug"
@@ -16,4 +18,18 @@ max_output_tokens = 2000
 temperature = 0.2
 timeout_seconds = 120
 supports_tools = false
+
+# --- Perfis de midia (opcionais) ---
+
+# [profiles.image]
+# model = "gemini-2.0-flash-exp"
+# provider = "google-ai-studio"
+# api_key_env = "GOOGLE_AI_STUDIO_API_KEY"
+# timeout_seconds = 60
+# supports_reference_image = true
+
+# [profiles.tts]
+# model = "gemini-2.5-flash-tts"
+# api_key_env = "GOOGLE_AI_STUDIO_API_KEY"
+# timeout_seconds = 30
 

@@ -31,6 +31,8 @@ from utopiai.models import (
     ConversationStatus,
     DreamRun,
     LLMCall,
+    MediaJob,
+    MediaJobKind,
     MemoryKind,
     Message,
     MessageRole,
@@ -40,7 +42,14 @@ from utopiai.models import (
     User,
     now_utc,
 )
-from utopiai.prompting import REMEMBER_TOOL, PromptInput, PromptMemory, build_prompt
+from utopiai.prompting import (
+    REMEMBER_TOOL,
+    SEND_AUDIO_TOOL,
+    SEND_IMAGE_TOOL,
+    PromptInput,
+    PromptMemory,
+    build_prompt,
+)
 
 
 class NotReadyError(RuntimeError):
@@ -151,6 +160,22 @@ class ConversationService:
             )
             character_id = uuid.uuid4()
             asset = store_original(blob, filename, self.settings.data_dir / "cards", str(character_id))
+            # Save avatar if extracted
+            avatar_path = None
+            if card.avatar_data:
+                avatar_dir = self.settings.data_dir / "media" / str(character_id)
+                avatar_dir.mkdir(parents=True, exist_ok=True)
+                ext = "png" if filename.lower().endswith(".png") else "png"
+                avatar_file = avatar_dir / f"avatar.{ext}"
+                avatar_file.write_bytes(card.avatar_data)
+                avatar_path = str(avatar_file)
+            # Suggest voice (stub for now)
+            voice_id = None
+            if self.settings.tts_profile:
+                from utopiai.media import MediaGateway
+
+                gw = MediaGateway(self.settings.image_profile, self.settings.data_dir)
+                voice_id = gw.suggest_voice(card.personality)
             character = Character(
                 id=character_id,
                 owner_id=user.id,
@@ -169,6 +194,8 @@ class ConversationService:
                 original_format=card.original_format,
                 original_file_name=filename,
                 original_asset_path=str(asset),
+                avatar_path=avatar_path,
+                voice_id=voice_id,
             )
             session.add(character)
             await session.flush()
@@ -307,8 +334,9 @@ class ConversationService:
     ) -> tuple[LLMResult, bool]:
         profile = self.settings.chat_profile
         tools_enabled = profile.supports_tools is not False
+        tools = self._available_tools(ctx) if tools_enabled else None
         try:
-            result = await complete(profile, prompt, tools=[REMEMBER_TOOL] if tools_enabled else None)
+            result = await complete(profile, prompt, tools=tools)
         except Exception as exc:
             self._record_failed_call(session, ctx.relationship.id, source_message.id, exc)
             if not tools_enabled:
@@ -323,7 +351,8 @@ class ConversationService:
         if not result.tool_calls:
             return result, False
         tool_messages: list[dict[str, Any]] = []
-        valid_calls = [call for call in result.tool_calls if call["name"] == "lembrar"][:4]
+        _MEDIA_TOOLS = {"lembrar", "enviar_imagem", "enviar_audio"}
+        valid_calls = [call for call in result.tool_calls if call["name"] in _MEDIA_TOOLS][:6]
         prompt.append(
             {
                 "role": "assistant",
@@ -341,29 +370,70 @@ class ConversationService:
                 ],
             }
         )
+        used_memory = False
         for call in valid_calls:
             args = call["arguments"]
-            if args.get("tipo") not in {"usuario", "relacionamento"}:
-                continue
-            kind = MemoryKind.USER if args.get("tipo") == "usuario" else MemoryKind.RELATIONSHIP
-            supersedes = args.get("substitui_id")
-            memory = await add_memory(
-                session,
-                ctx.relationship.id,
-                kind,
-                str(args.get("fato", "")),
-                source="model",
-                conversation_id=ctx.conversation.id,
-                evidence_message_ids=[source_message.id],
-                supersedes_id=uuid.UUID(supersedes) if supersedes else None,
-            )
-            tool_messages.append(
-                {"role": "tool", "tool_call_id": call["id"], "content": f"salvo:{memory.id}"}
-            )
+            if call["name"] == "lembrar":
+                if args.get("tipo") not in {"usuario", "relacionamento"}:
+                    tool_messages.append(
+                        {"role": "tool", "tool_call_id": call["id"], "content": "erro: tipo invalido"}
+                    )
+                    continue
+                kind = MemoryKind.USER if args.get("tipo") == "usuario" else MemoryKind.RELATIONSHIP
+                supersedes = args.get("substitui_id")
+                memory = await add_memory(
+                    session,
+                    ctx.relationship.id,
+                    kind,
+                    str(args.get("fato", "")),
+                    source="model",
+                    conversation_id=ctx.conversation.id,
+                    evidence_message_ids=[source_message.id],
+                    supersedes_id=uuid.UUID(supersedes) if supersedes else None,
+                )
+                tool_messages.append(
+                    {"role": "tool", "tool_call_id": call["id"], "content": f"salvo:{memory.id}"}
+                )
+                used_memory = True
+            elif call["name"] == "enviar_imagem":
+                job = MediaJob(
+                    character_id=ctx.character.id,
+                    relationship_id=ctx.relationship.id,
+                    conversation_id=ctx.conversation.id,
+                    kind=MediaJobKind.IMAGE,
+                    prompt_or_text=str(args.get("descricao", "")),
+                )
+                session.add(job)
+                await session.flush()
+                tool_messages.append(
+                    {"role": "tool", "tool_call_id": call["id"], "content": f"enfileirado:{job.id}"}
+                )
+            elif call["name"] == "enviar_audio":
+                job = MediaJob(
+                    character_id=ctx.character.id,
+                    relationship_id=ctx.relationship.id,
+                    conversation_id=ctx.conversation.id,
+                    kind=MediaJobKind.AUDIO,
+                    prompt_or_text=str(args.get("texto", "")),
+                )
+                session.add(job)
+                await session.flush()
+                tool_messages.append(
+                    {"role": "tool", "tool_call_id": call["id"], "content": f"enfileirado:{job.id}"}
+                )
         prompt.extend(tool_messages)
-        final = await complete(profile, prompt, tools=[REMEMBER_TOOL])
+        final = await complete(profile, prompt, tools=tools)
         self._record_call(session, ctx.relationship.id, source_message.id, "chat", final)
-        return final, bool(valid_calls)
+        return final, used_memory
+
+    def _available_tools(self, ctx: RuntimeContext) -> list[dict[str, Any]]:
+        """Build tool list based on character capabilities."""
+        tools = [REMEMBER_TOOL]
+        if ctx.character.avatar_path and self.settings.image_profile:
+            tools.append(SEND_IMAGE_TOOL)
+        if ctx.character.voice_id and self.settings.tts_profile:
+            tools.append(SEND_AUDIO_TOOL)
+        return tools
 
     def _record_call(
         self,
@@ -528,12 +598,47 @@ class ConversationService:
             )
             paths = [Path(character.original_asset_path).parent for character in characters]
             paths.extend(self.settings.data_dir / "vaults" / str(character.id) for character in characters)
+            paths.extend(self.settings.data_dir / "media" / str(character.id) for character in characters)
             await session.delete(await session.get(User, identity.user_id))
         allowed_roots = [
             (self.settings.data_dir / "cards").resolve(),
             (self.settings.data_dir / "vaults").resolve(),
+            (self.settings.data_dir / "media").resolve(),
         ]
         for path in paths:
             resolved = path.resolve()
             if any(resolved.is_relative_to(root) for root in allowed_roots) and resolved.exists():
                 shutil.rmtree(resolved)
+
+    async def set_voice(self, telegram_id: int, chat_id: int, voice_id: str) -> None:
+        async with self.sessions.begin() as session:
+            ctx = await self._context(session, telegram_id, chat_id)
+            ctx.character.voice_id = voice_id.strip()[:64]
+
+    async def converse_with_image(
+        self,
+        telegram_id: int,
+        chat_id: int,
+        external_message_id: str,
+        caption: str,
+        image_bytes: bytes,
+    ) -> GeneratedReply:
+        """Handle a user message that includes an image (vision input)."""
+        # ponytail: for now, encode image description into text and pass through normal converse.
+        # Full multimodal prompt building (image_url parts) deferred until build_prompt supports it.
+
+        text_content = caption or "(imagem enviada pelo usuario)"
+        # TODO: when build_prompt supports multimodal, pass image_bytes directly
+        return await self.converse(telegram_id, chat_id, external_message_id, text_content)
+
+    async def converse_with_audio(
+        self,
+        telegram_id: int,
+        chat_id: int,
+        external_message_id: str,
+        audio_bytes: bytes,
+    ) -> GeneratedReply:
+        """Handle a user voice message with native audio input."""
+        # ponytail: stub — full audio-as-input requires multimodal prompt support
+        text_content = "(audio enviado pelo usuario — transcricao nao disponivel ainda)"
+        return await self.converse(telegram_id, chat_id, external_message_id, text_content)
