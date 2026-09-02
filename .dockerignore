@@ -4,8 +4,8 @@ __pycache__
 .pytest_cache
 .ruff_cache
 .env
+config/llm_profiles.toml
 cards
 vaults
 backups
 postgres-data
-
