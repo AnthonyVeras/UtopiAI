@@ -26,12 +26,20 @@ def _image_profile(*, supports_ref: bool = True) -> LLMProfile:
 
 
 def _fake_response(status: int = 200, image_b64: str = "iVBORw0KGgo="):
-    """Build a fake httpx response for mocking."""
+    """Build a fake httpx response matching Google generateContent format."""
     body = {
-        "steps": [
+        "candidates": [
             {
-                "type": "model_output",
-                "content": [{"type": "image", "data": image_b64}],
+                "content": {
+                    "parts": [
+                        {
+                            "inlineData": {
+                                "mimeType": "image/png",
+                                "data": image_b64,
+                            }
+                        }
+                    ]
+                }
             }
         ]
     }
@@ -49,8 +57,12 @@ async def test_generate_image_success(tmp_path, monkeypatch):
     gw = MediaGateway(_image_profile(), tmp_path)
     cid = uuid.uuid4()
     jid = uuid.uuid4()
+    captured_url = []
+    captured_headers = {}
 
     async def mock_post(self, url, **kwargs):
+        captured_url.append(str(url))
+        captured_headers.update(kwargs.get("headers", {}))
         return _fake_response()
 
     with patch("httpx.AsyncClient.post", mock_post):
@@ -59,6 +71,8 @@ async def test_generate_image_success(tmp_path, monkeypatch):
     assert path.exists()
     assert path.suffix == ".png"
     assert str(cid) in str(path)
+    assert captured_url[0].endswith("/v1beta/models/gemini-test:generateContent")
+    assert captured_headers.get("x-goog-api-key") == "test-key"
 
 
 @pytest.mark.asyncio
@@ -78,9 +92,13 @@ async def test_generate_image_with_reference(tmp_path, monkeypatch):
     with patch("httpx.AsyncClient.post", mock_post):
         await gw.generate_image(uuid.uuid4(), uuid.uuid4(), "test", str(avatar))
 
-    # Should have 2 input parts: text + image
-    assert len(captured_body["input"]) == 2
-    assert captured_body["input"][1]["type"] == "image"
+    # Should have contents[0].parts: text + inline_data
+    parts = captured_body["contents"][0]["parts"]
+    assert len(parts) == 2
+    assert parts[0]["text"] == "test"
+    assert "inline_data" in parts[1]
+    assert parts[1]["inline_data"]["mime_type"] == "image/png"
+    assert captured_body["generationConfig"]["responseModalities"] == ["TEXT", "IMAGE"]
 
 
 @pytest.mark.asyncio
@@ -99,7 +117,10 @@ async def test_generate_image_ignores_ref_when_unsupported(tmp_path, monkeypatch
     with patch("httpx.AsyncClient.post", mock_post):
         await gw.generate_image(uuid.uuid4(), uuid.uuid4(), "test", str(avatar))
 
-    assert len(captured_body["input"]) == 1  # only text, no image
+    parts = captured_body["contents"][0]["parts"]
+    assert len(parts) == 1  # only text, no inline_data
+    assert parts[0]["text"] == "test"
+    assert captured_body["generationConfig"]["responseModalities"] == ["TEXT", "IMAGE"]
 
 
 @pytest.mark.asyncio
@@ -124,12 +145,38 @@ async def test_generate_image_no_profile(tmp_path):
 
 def test_extract_image_missing():
     with pytest.raises(MediaError, match="nao contem imagem"):
-        _extract_image({"steps": [{"type": "model_output", "content": []}]})
+        _extract_image({"candidates": [{"content": {"parts": [{"text": "no image here"}]}}]})
 
 
-def test_extract_image_output_image_fallback():
-    data = {"steps": [], "output_image": {"data": "abc123"}}
-    assert _extract_image(data) == "abc123"
+def test_extract_image_inline_data_snake_case():
+    data = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {"text": "here is your image"},
+                        {"inline_data": {"mime_type": "image/png", "data": "snake_case_b64"}},
+                    ]
+                }
+            }
+        ]
+    }
+    assert _extract_image(data) == "snake_case_b64"
+
+
+def test_extract_image_inline_data_camel_case():
+    data = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {"inlineData": {"mimeType": "image/png", "data": "camelCase_b64"}},
+                    ]
+                }
+            }
+        ]
+    }
+    assert _extract_image(data) == "camelCase_b64"
 
 
 # --- Card avatar extraction ---
