@@ -15,7 +15,11 @@ class LLMProfile:
     temperature: float = 0.8
     timeout_seconds: int = 90
     api_base: str | None = None
+    provider: str | None = None
     supports_tools: bool | str = "auto"
+    supports_vision: bool = False
+    supports_audio_input: bool = False
+    supports_reference_image: bool = False
 
     @property
     def api_key(self) -> str:
@@ -35,6 +39,8 @@ class Settings:
     log_level: str
     chat_profile: LLMProfile
     dream_profile: LLMProfile
+    image_profile: LLMProfile | None = None
+    tts_profile: LLMProfile | None = None
 
     @classmethod
     def load(cls) -> Settings:
@@ -62,4 +68,6 @@ class Settings:
             log_level=os.getenv("LOG_LEVEL", "INFO"),
             chat_profile=LLMProfile(**raw["chat"]),
             dream_profile=LLMProfile(**raw["dream"]),
+            image_profile=LLMProfile(**raw["image"]) if "image" in raw else None,
+            tts_profile=LLMProfile(**raw["tts"]) if "tts" in raw else None,
         )

@@ -84,6 +84,30 @@ class DreamStatus(enum.StrEnum):
     FAILED = "failed"
 
 
+class MediaJobKind(enum.StrEnum):
+    IMAGE = "image"
+    AUDIO = "audio"
+
+
+class MediaJobStatus(enum.StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+
+
+class DeliveryKind(enum.StrEnum):
+    TEXT = "text"
+    IMAGE = "image"
+    AUDIO = "audio"
+
+
+class DeliveryStatus(enum.StrEnum):
+    PENDING = "pending"
+    DELIVERED = "delivered"
+    FAILED = "failed"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -133,6 +157,8 @@ class Character(Base):
     original_format: Mapped[str] = mapped_column(String(16))
     original_file_name: Mapped[str] = mapped_column(String(255))
     original_asset_path: Mapped[str] = mapped_column(Text)
+    avatar_path: Mapped[str | None] = mapped_column(Text)
+    voice_id: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[CharacterStatus] = mapped_column(
         Enum(CharacterStatus, native_enum=False), default=CharacterStatus.ACTIVE
     )
@@ -288,4 +314,37 @@ class LLMCall(Base):
     estimated_cost: Mapped[float | None] = mapped_column(Float)
     success: Mapped[bool]
     error_type: Mapped[str | None] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class MediaJob(Base):
+    __tablename__ = "media_jobs"
+    __table_args__ = (Index("ix_media_jobs_pending", "status", "created_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    character_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("characters.id", ondelete="CASCADE"))
+    relationship_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("relationships.id", ondelete="CASCADE"))
+    conversation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("conversations.id", ondelete="CASCADE"))
+    kind: Mapped[MediaJobKind] = mapped_column(Enum(MediaJobKind, native_enum=False))
+    prompt_or_text: Mapped[str] = mapped_column(Text)
+    status: Mapped[MediaJobStatus] = mapped_column(
+        Enum(MediaJobStatus, native_enum=False), default=MediaJobStatus.PENDING
+    )
+    result_path: Mapped[str | None] = mapped_column(Text)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PendingDelivery(Base):
+    __tablename__ = "pending_deliveries"
+    __table_args__ = (Index("ix_pending_deliveries_pending", "status", "created_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("conversations.id", ondelete="CASCADE"))
+    kind: Mapped[DeliveryKind] = mapped_column(Enum(DeliveryKind, native_enum=False))
+    content_path_or_text: Mapped[str] = mapped_column(Text)
+    status: Mapped[DeliveryStatus] = mapped_column(
+        Enum(DeliveryStatus, native_enum=False), default=DeliveryStatus.PENDING
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)

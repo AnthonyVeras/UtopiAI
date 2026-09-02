@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import secrets
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 
 from sqlalchemy import select, text
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -21,7 +23,15 @@ from utopiai.config import Settings
 from utopiai.db import session_factory
 from utopiai.dreaming import DreamWorker
 from utopiai.logging import configure_logging
-from utopiai.models import DreamRun, MemoryKind, Relationship
+from utopiai.models import (
+    Conversation,
+    DeliveryKind,
+    DeliveryStatus,
+    DreamRun,
+    MemoryKind,
+    PendingDelivery,
+    Relationship,
+)
 from utopiai.service import ConversationService, NotReadyError
 
 logger = logging.getLogger(__name__)
@@ -91,9 +101,34 @@ class TelegramAdapter:
         )
 
     async def photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if not await self.guard(update) or not context.user_data.get("awaiting_card", False):
+        if not await self.guard(update):
             return
-        await update.effective_message.reply_text(CARD_PHOTO_HINT)
+        if context.user_data.get("awaiting_card", False):
+            await update.effective_message.reply_text(CARD_PHOTO_HINT)
+            return
+        # Vision input: download photo and pass to conversation
+        if not self.settings.chat_profile.supports_vision:
+            return  # silently ignore if model doesn't support vision
+        try:
+            photo = update.effective_message.photo[-1]  # largest resolution
+            telegram_file = await photo.get_file()
+            photo_bytes = bytes(await telegram_file.download_as_bytearray())
+            caption = update.effective_message.caption or ""
+            reply = await self.service.converse_with_image(
+                update.effective_user.id,
+                update.effective_chat.id,
+                f"{update.effective_chat.id}:{update.effective_message.message_id}",
+                caption,
+                photo_bytes,
+            )
+            for chunk in split_text(reply.text):
+                await update.effective_message.reply_text(chunk)
+            await self.service.mark_delivered(reply.message_id)
+        except NotReadyError as exc:
+            await update.effective_message.reply_text(str(exc))
+        except Exception:
+            logger.exception("vision_message_failed")
+            await update.effective_message.reply_text("A geracao falhou. Use /repetir para tentar de novo.")
 
     async def document(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self.guard(update) or not context.user_data.pop("awaiting_card", False):
@@ -116,8 +151,11 @@ class TelegramAdapter:
             await update.effective_message.reply_text(f"Nao foi possivel importar o card: {exc}")
             return
         warning = "\n".join(card.compatibility_warnings)
+        voice_msg = f"\nVoz: {character.voice_id}. Use /voz <id> para trocar." if character.voice_id else ""
+        avatar_msg = "\nAvatar extraido do card." if character.avatar_path else ""
         await update.effective_message.reply_text(
-            f"{character.name} foi importado com sucesso." + (f"\n{warning}" if warning else "")
+            f"{character.name} foi importado com sucesso.{avatar_msg}{voice_msg}"
+            + (f"\n{warning}" if warning else "")
         )
         if character.first_mes:
             for chunk in split_text(character.first_mes):
@@ -306,6 +344,57 @@ class TelegramAdapter:
             ),
         )
 
+    async def voz(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self.guard(update):
+            return
+        try:
+            ctx = await self.service.active_context(update.effective_user.id, update.effective_chat.id)
+        except NotReadyError as exc:
+            await update.effective_message.reply_text(str(exc))
+            return
+        if context.args:
+            new_voice = " ".join(context.args).strip()
+            await self.service.set_voice(update.effective_user.id, update.effective_chat.id, new_voice)
+            await update.effective_message.reply_text(f"Voz alterada para: {new_voice}")
+        else:
+            current = ctx.character.voice_id or "(nenhuma)"
+            await update.effective_message.reply_text(f"Voz atual: {current}\nPara trocar: /voz <id>")
+
+    async def audio(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle voice messages and audio files."""
+        if not await self.guard(update):
+            return
+        voice = update.effective_message.voice or update.effective_message.audio
+        if not voice:
+            return
+        try:
+            telegram_file = await voice.get_file()
+            audio_bytes = bytes(await telegram_file.download_as_bytearray())
+            if self.settings.chat_profile.supports_audio_input:
+                reply = await self.service.converse_with_audio(
+                    update.effective_user.id,
+                    update.effective_chat.id,
+                    f"{update.effective_chat.id}:{update.effective_message.message_id}",
+                    audio_bytes,
+                )
+            else:
+                # Fallback: treat audio as a normal message until transcription is implemented
+                text_content = "(audio enviado pelo usuario — transcricao nao disponivel ainda)"
+                reply = await self.service.converse(
+                    update.effective_user.id,
+                    update.effective_chat.id,
+                    f"{update.effective_chat.id}:{update.effective_message.message_id}",
+                    text_content,
+                )
+            for chunk in split_text(reply.text):
+                await update.effective_message.reply_text(chunk)
+            await self.service.mark_delivered(reply.message_id)
+        except NotReadyError as exc:
+            await update.effective_message.reply_text(str(exc))
+        except Exception:
+            logger.exception("audio_message_failed")
+            await update.effective_message.reply_text("A geracao falhou. Use /repetir para tentar de novo.")
+
     async def confirm_delete(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         query = update.callback_query
         await query.answer()
@@ -339,14 +428,66 @@ class TelegramAdapter:
             "repetir": self.repetir,
             "apagar_conversa": self.ask_delete,
             "apagar_tudo": self.ask_delete,
+            "voz": self.voz,
         }
         for name, callback in handlers.items():
             app.add_handler(CommandHandler(name, callback))
         app.add_handler(CallbackQueryHandler(self.confirm_delete, pattern=r"^delete:"))
         app.add_handler(MessageHandler(filters.PHOTO, self.photo))
+        app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, self.audio))
         app.add_handler(MessageHandler(filters.Document.ALL, self.document))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.message))
+        # Schedule delivery polling
+        app.job_queue.run_repeating(self._deliver_pending, interval=5, first=5)
         return app
+
+    async def _deliver_pending(self, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Poll pending_deliveries and send media to the corresponding chat."""
+        try:
+            async with self.sessions.begin() as session:
+                deliveries = list(
+                    await session.scalars(
+                        select(PendingDelivery)
+                        .where(PendingDelivery.status == DeliveryStatus.PENDING)
+                        .order_by(PendingDelivery.created_at)
+                        .with_for_update(skip_locked=True)
+                        .limit(5)
+                    )
+                )
+                for delivery in deliveries:
+                    try:
+                        conversation = await session.get(Conversation, delivery.conversation_id)
+                        if not conversation:
+                            delivery.status = DeliveryStatus.FAILED
+                            continue
+                        chat_id = int(conversation.external_id)
+                        if delivery.kind == DeliveryKind.IMAGE:
+                            path = Path(delivery.content_path_or_text)
+                            exists = await asyncio.to_thread(path.exists)
+                            data = await asyncio.to_thread(path.read_bytes) if exists else None
+                            if data:
+                                await context.bot.send_photo(chat_id=chat_id, photo=data)
+                            else:
+                                delivery.status = DeliveryStatus.FAILED
+                                continue
+                        elif delivery.kind == DeliveryKind.AUDIO:
+                            path = Path(delivery.content_path_or_text)
+                            exists = await asyncio.to_thread(path.exists)
+                            data = await asyncio.to_thread(path.read_bytes) if exists else None
+                            if data:
+                                await context.bot.send_voice(chat_id=chat_id, voice=data)
+                            else:
+                                delivery.status = DeliveryStatus.FAILED
+                                continue
+                        elif delivery.kind == DeliveryKind.TEXT:
+                            for chunk in split_text(delivery.content_path_or_text):
+                                await context.bot.send_message(chat_id=chat_id, text=chunk)
+                        delivery.status = DeliveryStatus.DELIVERED
+                    except Exception:
+                        logger.exception("delivery_failed id=%s", delivery.id)
+                        delivery.status = DeliveryStatus.FAILED
+        except Exception:
+            logger.exception("delivery_poll_error")
 
 
 def main() -> None:
