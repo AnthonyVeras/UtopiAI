@@ -351,8 +351,8 @@ class ConversationService:
         if not result.tool_calls:
             return result, False
         tool_messages: list[dict[str, Any]] = []
-        _MEDIA_TOOLS = {"lembrar", "enviar_imagem", "enviar_audio"}
-        valid_calls = [call for call in result.tool_calls if call["name"] in _MEDIA_TOOLS][:6]
+        allowed_tool_names = {t["function"]["name"] for t in (tools or [])}
+        valid_calls = [call for call in result.tool_calls if call["name"] in allowed_tool_names][:6]
         prompt.append(
             {
                 "role": "assistant",
