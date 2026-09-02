@@ -26,6 +26,10 @@ from utopiai.service import ConversationService, NotReadyError
 
 logger = logging.getLogger(__name__)
 TELEGRAM_TEXT_LIMIT = 4096
+CARD_PHOTO_HINT = (
+    "Envie o PNG como arquivo/documento, nao como foto. "
+    "O Telegram remove os metadados do Character Card ao comprimir imagens."
+)
 
 
 def split_text(value: str, limit: int = TELEGRAM_TEXT_LIMIT) -> list[str]:
@@ -82,7 +86,14 @@ class TelegramAdapter:
         if not await self.guard(update):
             return
         context.user_data["awaiting_card"] = True
-        await update.effective_message.reply_text("Envie agora o card .json ou .png (maximo 10 MB).")
+        await update.effective_message.reply_text(
+            "Envie agora o card .json ou .png como arquivo/documento (maximo 10 MB)."
+        )
+
+    async def photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self.guard(update) or not context.user_data.get("awaiting_card", False):
+            return
+        await update.effective_message.reply_text(CARD_PHOTO_HINT)
 
     async def document(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self.guard(update) or not context.user_data.pop("awaiting_card", False):
@@ -332,6 +343,7 @@ class TelegramAdapter:
         for name, callback in handlers.items():
             app.add_handler(CommandHandler(name, callback))
         app.add_handler(CallbackQueryHandler(self.confirm_delete, pattern=r"^delete:"))
+        app.add_handler(MessageHandler(filters.PHOTO, self.photo))
         app.add_handler(MessageHandler(filters.Document.ALL, self.document))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.message))
         return app
