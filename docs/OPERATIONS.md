@@ -55,6 +55,7 @@ cards/config, rode migrações e então suba serviços. Faça um ensaio de resta
 - `dream_runs`: tentativas, watermark e resumo;
 - `/repetir`: recria geração a partir da última mensagem que falhou.
 
-O Docker Desktop estava indisponível durante a geração inicial do repositório; CI valida sintaxe do
-Compose, mas o primeiro deploy deve registrar o smoke test de containers no handoff.
+O build da imagem, a migração e o smoke test de bot/worker devem ser registrados no handoff de
+cada release. `migrate` é o único serviço que declara o build; bot e worker reutilizam a mesma
+imagem para evitar builds concorrentes com a mesma tag.
 

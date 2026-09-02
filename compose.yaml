@@ -1,7 +1,7 @@
 name: utopiai
 
 x-app: &app
-  build: .
+  image: utopiai-app:local
   env_file:
     - path: .env
       required: false
@@ -29,7 +29,8 @@ services:
 
   migrate:
     <<: *app
-    command: ["uv", "run", "alembic", "upgrade", "head"]
+    build: .
+    command: ["uv", "run", "--no-sync", "alembic", "upgrade", "head"]
     restart: "no"
     depends_on:
       postgres:
@@ -37,14 +38,14 @@ services:
 
   bot:
     <<: *app
-    command: ["uv", "run", "utopiai-bot"]
+    command: ["uv", "run", "--no-sync", "utopiai-bot"]
     depends_on:
       migrate:
         condition: service_completed_successfully
 
   worker:
     <<: *app
-    command: ["uv", "run", "utopiai-worker"]
+    command: ["uv", "run", "--no-sync", "utopiai-worker"]
     depends_on:
       migrate:
         condition: service_completed_successfully
