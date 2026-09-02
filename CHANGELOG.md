@@ -11,6 +11,8 @@ Formato baseado em Keep a Changelog. O projeto ainda não possui licença públi
 
 ### Fixed
 
+- Adicionado aviso imediato quando um Character Card PNG e enviado como foto no Telegram,
+  preservando o estado de importacao para o reenvio como arquivo.
 - Incluído Git apenas no estágio de build para instalar a dependência fixada por commit.
 - Adicionado build real da imagem Docker ao CI.
 - Impedida a reinstalação de dependências de desenvolvimento quando os containers iniciam.
