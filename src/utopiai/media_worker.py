@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -64,7 +65,7 @@ class MediaWorker:
                 job.finished_at = now_utc()
             return True
 
-    async def _process(self, session: AsyncSession, job: MediaJob) -> str:
+    async def _process(self, session: AsyncSession, job: MediaJob) -> Path:
         character = await session.get(Character, job.character_id)
         if job.kind == MediaJobKind.IMAGE:
             return await self.gateway.generate_image(

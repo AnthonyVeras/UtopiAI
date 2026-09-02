@@ -378,16 +378,12 @@ class TelegramAdapter:
                     audio_bytes,
                 )
             else:
-                # Fallback: transcribe and send as text
-                from utopiai.media import MediaGateway
-
-                gw = MediaGateway(self.settings.image_profile, self.settings.data_dir)
-                text_content = await gw.transcribe_audio_bytes(audio_bytes)
+                # ponytail: transcription not implemented yet, tell user
                 reply = await self.service.converse(
                     update.effective_user.id,
                     update.effective_chat.id,
                     f"{update.effective_chat.id}:{update.effective_message.message_id}",
-                    text_content,
+                    "(audio recebido — transcricao nao disponivel ainda)",
                 )
             for chunk in split_text(reply.text):
                 await update.effective_message.reply_text(chunk)
