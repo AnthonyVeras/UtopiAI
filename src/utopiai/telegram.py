@@ -108,7 +108,10 @@ class TelegramAdapter:
             return
         # Vision input: download photo and pass to conversation
         if not self.settings.chat_profile.supports_vision:
-            return  # silently ignore if model doesn't support vision
+            await update.effective_message.reply_text(
+                "Este personagem nao possui visao habilitada no momento."
+            )
+            return
         try:
             photo = update.effective_message.photo[-1]  # largest resolution
             telegram_file = await photo.get_file()
