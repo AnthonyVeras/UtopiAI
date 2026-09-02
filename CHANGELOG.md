@@ -11,6 +11,9 @@ Formato baseado em Keep a Changelog. O projeto ainda não possui licença públi
 
 ### Fixed
 
+- Adicionado extra `[job-queue]` ao `python-telegram-bot` e explicitadas as dependências `httpx` e `pillow`.
+- Corrigido endpoint do Google AI Studio para geração de imagem multimodal (`models/{model}:generateContent`).
+- Adicionado feedback amigável ao usuário caso fotos sejam enviadas para modelos sem suporte à visão.
 - Adicionado aviso imediato quando um Character Card PNG e enviado como foto no Telegram,
   preservando o estado de importacao para o reenvio como arquivo.
 - Incluído Git apenas no estágio de build para instalar a dependência fixada por commit.
