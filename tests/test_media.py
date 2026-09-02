@@ -26,12 +26,16 @@ def _image_profile(*, supports_ref: bool = True) -> LLMProfile:
 
 
 def _fake_response(status: int = 200, image_b64: str = "iVBORw0KGgo="):
-    """Build a fake httpx response for mocking."""
+    """Build a fake httpx response matching generateContent format."""
     body = {
-        "steps": [
+        "candidates": [
             {
-                "type": "model_output",
-                "content": [{"type": "image", "data": image_b64}],
+                "content": {
+                    "parts": [
+                        {"text": "Here is the image"},
+                        {"inlineData": {"mimeType": "image/png", "data": image_b64}},
+                    ]
+                }
             }
         ]
     }
@@ -50,7 +54,11 @@ async def test_generate_image_success(tmp_path, monkeypatch):
     cid = uuid.uuid4()
     jid = uuid.uuid4()
 
+    captured = {}
+
     async def mock_post(self, url, **kwargs):
+        captured["url"] = url
+        captured["body"] = kwargs.get("json", {})
         return _fake_response()
 
     with patch("httpx.AsyncClient.post", mock_post):
@@ -59,6 +67,12 @@ async def test_generate_image_success(tmp_path, monkeypatch):
     assert path.exists()
     assert path.suffix == ".png"
     assert str(cid) in str(path)
+    # Verify URL contains model name
+    assert "gemini-test" in captured["url"]
+    assert ":generateContent" in captured["url"]
+    # Verify body has correct structure
+    assert "contents" in captured["body"]
+    assert captured["body"]["generationConfig"]["responseModalities"] == ["TEXT", "IMAGE"]
 
 
 @pytest.mark.asyncio
@@ -78,9 +92,10 @@ async def test_generate_image_with_reference(tmp_path, monkeypatch):
     with patch("httpx.AsyncClient.post", mock_post):
         await gw.generate_image(uuid.uuid4(), uuid.uuid4(), "test", str(avatar))
 
-    # Should have 2 input parts: text + image
-    assert len(captured_body["input"]) == 2
-    assert captured_body["input"][1]["type"] == "image"
+    # Should have 2 parts: text + inline_data
+    parts = captured_body["contents"][0]["parts"]
+    assert len(parts) == 2
+    assert "inline_data" in parts[1]
 
 
 @pytest.mark.asyncio
@@ -99,7 +114,7 @@ async def test_generate_image_ignores_ref_when_unsupported(tmp_path, monkeypatch
     with patch("httpx.AsyncClient.post", mock_post):
         await gw.generate_image(uuid.uuid4(), uuid.uuid4(), "test", str(avatar))
 
-    assert len(captured_body["input"]) == 1  # only text, no image
+    assert len(captured_body["contents"][0]["parts"]) == 1  # only text, no inline_data
 
 
 @pytest.mark.asyncio
@@ -124,12 +139,39 @@ async def test_generate_image_no_profile(tmp_path):
 
 def test_extract_image_missing():
     with pytest.raises(MediaError, match="nao contem imagem"):
-        _extract_image({"steps": [{"type": "model_output", "content": []}]})
+        _extract_image({"candidates": [{"content": {"parts": [{"text": "no image"}]}}]})
 
 
-def test_extract_image_output_image_fallback():
-    data = {"steps": [], "output_image": {"data": "abc123"}}
+def test_extract_image_inline_data():
+    data = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {"text": "here"},
+                        {"inlineData": {"mimeType": "image/png", "data": "abc123"}},
+                    ]
+                }
+            }
+        ]
+    }
     assert _extract_image(data) == "abc123"
+
+
+def test_extract_image_snake_case_fallback():
+    """Google sometimes uses snake_case in responses."""
+    data = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {"inline_data": {"mime_type": "image/png", "data": "xyz789"}},
+                    ]
+                }
+            }
+        ]
+    }
+    assert _extract_image(data) == "xyz789"
 
 
 # --- Card avatar extraction ---

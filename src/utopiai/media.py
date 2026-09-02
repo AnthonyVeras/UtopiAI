@@ -13,7 +13,7 @@ from utopiai.config import LLMProfile
 
 logger = logging.getLogger(__name__)
 
-GOOGLE_AI_STUDIO_BASE = "https://generativelanguage.googleapis.com/v1beta/interactions"
+GOOGLE_GENERATE_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 IMAGE_TIMEOUT = 90
 DEFAULT_VOICE_ID = "Kore"  # ponytail: stub, replaced when TTS API details arrive
 
@@ -34,35 +34,32 @@ class MediaGateway:
         prompt: str,
         reference_image_path: str | None = None,
     ) -> Path:
-        """Generate image via Google AI Studio Interactions API.
+        """Generate image via Google AI Studio generateContent endpoint.
 
-        Sends the avatar as a reference image when the profile supports it
+        Uses responseModalities=["TEXT","IMAGE"] to request image output.
+        Sends the avatar as inline_data when the profile supports it
         and a path is provided, enabling facial consistency.
         """
         profile = self.image_profile
         if not profile:
             raise MediaError("Perfil de imagem nao configurado")
 
-        input_parts: list[dict] = [{"type": "text", "text": prompt}]
+        parts: list[dict] = [{"text": prompt}]
         if reference_image_path and profile.supports_reference_image:
             ref_data = await _read_image_b64(reference_image_path)
             suffix = Path(reference_image_path).suffix.lower()
             mime = "image/png" if suffix == ".png" else "image/jpeg"
-            input_parts.append({"type": "image", "mime_type": mime, "data": ref_data})
+            parts.append({"inline_data": {"mime_type": mime, "data": ref_data}})
 
         body = {
-            "model": profile.model,
-            "input": input_parts,
-            "response_format": {
-                "type": "image",
-                "mime_type": "image/png",
-                "image_size": "1K",
-            },
+            "contents": [{"parts": parts}],
+            "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
         }
+        url = GOOGLE_GENERATE_URL.format(model=profile.model)
         timeout = profile.timeout_seconds or IMAGE_TIMEOUT
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(
-                GOOGLE_AI_STUDIO_BASE,
+                url,
                 headers={
                     "x-goog-api-key": profile.api_key,
                     "Content-Type": "application/json",
@@ -102,15 +99,17 @@ class MediaGateway:
 
 
 def _extract_image(data: dict) -> str:
-    """Walk Interactions API response to find the first image block."""
-    for step in data.get("steps", []):
-        for block in step.get("content", []):
-            if block.get("type") == "image" and block.get("data"):
-                return block["data"]
-    # Fallback: output_image convenience field
-    output = data.get("output_image", {})
-    if output.get("data"):
-        return output["data"]
+    """Walk generateContent response to find the first image part.
+
+    Response format: candidates[0].content.parts[] — look for a part
+    with "inlineData" (or "inline_data") containing base64 image data.
+    """
+    for candidate in data.get("candidates", []):
+        for part in candidate.get("content", {}).get("parts", []):
+            # Google uses camelCase in REST responses
+            inline = part.get("inlineData") or part.get("inline_data")
+            if inline and inline.get("data"):
+                return inline["data"]
     raise MediaError("Resposta da API nao contem imagem")
 
 
