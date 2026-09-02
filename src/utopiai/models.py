@@ -319,6 +319,7 @@ class LLMCall(Base):
 
 class MediaJob(Base):
     __tablename__ = "media_jobs"
+    __table_args__ = (Index("ix_media_jobs_pending", "status", "created_at"),)
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     character_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("characters.id", ondelete="CASCADE"))
@@ -337,6 +338,7 @@ class MediaJob(Base):
 
 class PendingDelivery(Base):
     __tablename__ = "pending_deliveries"
+    __table_args__ = (Index("ix_pending_deliveries_pending", "status", "created_at"),)
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     conversation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("conversations.id", ondelete="CASCADE"))
