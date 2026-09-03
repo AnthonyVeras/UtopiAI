@@ -129,9 +129,7 @@ async def test_concurrent_converse_does_not_duplicate_conversation(postgres, mon
     assert len(results) == 2
     async with factory() as session:
         open_convs = (
-            await session.scalars(
-                select(Conversation).where(Conversation.status == ConversationStatus.OPEN)
-            )
+            await session.scalars(select(Conversation).where(Conversation.status == ConversationStatus.OPEN))
         ).all()
         assert len(open_convs) == 1
 
@@ -175,4 +173,3 @@ async def test_two_media_workers_do_not_process_same_job(postgres, monkeypatch, 
         assert len(deliveries) == 1
         assert deliveries[0].kind == DeliveryKind.IMAGE
         assert deliveries[0].status == DeliveryStatus.PENDING
-

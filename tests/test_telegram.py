@@ -59,9 +59,7 @@ async def test_photo_size_limit():
     )
     reply_text = AsyncMock()
     photo_item = SimpleNamespace(file_size=15 * 1024 * 1024)  # 15 MB
-    update = SimpleNamespace(
-        effective_message=SimpleNamespace(photo=[photo_item], reply_text=reply_text)
-    )
+    update = SimpleNamespace(effective_message=SimpleNamespace(photo=[photo_item], reply_text=reply_text))
     context = SimpleNamespace(user_data={})
 
     await adapter.photo(update, context)
@@ -128,4 +126,3 @@ async def test_sonhar_failed_reports_error():
     await adapter.sonhar(update, context)
 
     reply_text.assert_awaited_once_with("Falha ao processar o sonho: Erro na API de dream")
-

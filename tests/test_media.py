@@ -260,7 +260,6 @@ async def test_media_worker_failure_enqueues_text_notification(tmp_path):
     await engine.dispose()
 
 
-
 def test_extract_image_inline_data_snake_case():
     data = {
         "candidates": [
