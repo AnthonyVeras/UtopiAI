@@ -63,6 +63,18 @@ class MediaWorker:
                 job.status = MediaJobStatus.FAILED
                 job.error = f"{type(exc).__name__}: {exc}"[:2000]
                 job.finished_at = now_utc()
+                failure_msg = (
+                    "Nao consegui gerar a imagem agora. Tente novamente mais tarde."
+                    if job.kind == MediaJobKind.IMAGE
+                    else "Nao consegui gerar o audio agora. Tente novamente mais tarde."
+                )
+                session.add(
+                    PendingDelivery(
+                        conversation_id=job.conversation_id,
+                        kind=DeliveryKind.TEXT,
+                        content_path_or_text=failure_msg,
+                    )
+                )
             return True
 
     async def _process(self, session: AsyncSession, job: MediaJob) -> Path:

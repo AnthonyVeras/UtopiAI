@@ -242,11 +242,11 @@ class ConversationService:
         self, telegram_id: int, chat_id: int, external_message_id: str, content: str
     ) -> GeneratedReply:
         async with self.sessions.begin() as session:
-            ctx = await self._context(session, telegram_id, chat_id)
             await session.execute(
                 text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
-                {"key": f"conversation:{ctx.conversation.id}"},
+                {"key": f"chat:telegram:{telegram_id}:{chat_id}"},
             )
+            ctx = await self._context(session, telegram_id, chat_id)
             existing = await session.scalar(
                 select(Message).where(
                     Message.channel == "telegram", Message.external_id == external_message_id
