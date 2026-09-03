@@ -10,7 +10,23 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from utopiai.config import LLMProfile, Settings
 from utopiai.dreaming import DreamWorker
 from utopiai.llm import LLMResult
-from utopiai.models import Base, DreamRun, Message, Relationship, now_utc
+from utopiai.media import MediaGateway
+from utopiai.media_worker import MediaWorker
+from utopiai.models import (
+    Base,
+    Conversation,
+    ConversationStatus,
+    DeliveryKind,
+    DeliveryStatus,
+    DreamRun,
+    MediaJob,
+    MediaJobKind,
+    MediaJobStatus,
+    Message,
+    PendingDelivery,
+    Relationship,
+    now_utc,
+)
 from utopiai.service import ConversationService
 
 pytestmark = pytest.mark.skipif(
@@ -98,3 +114,62 @@ async def test_two_workers_do_not_duplicate_dream(postgres, monkeypatch):
     assert sorted(results) == [False, True]
     async with factory() as session:
         assert await session.scalar(select(func.count(DreamRun.id))) == 1
+
+
+async def test_concurrent_converse_does_not_duplicate_conversation(postgres, monkeypatch):
+    settings, factory = postgres
+    monkeypatch.setattr("utopiai.service.complete", fake_chat)
+    service = ConversationService(settings, factory)
+    await service.import_character(7, 70, "luna.json", card_blob())
+
+    results = await asyncio.gather(
+        service.converse(7, 70, "70:101", "Mensagem A"),
+        service.converse(7, 70, "70:102", "Mensagem B"),
+    )
+    assert len(results) == 2
+    async with factory() as session:
+        open_convs = (
+            await session.scalars(select(Conversation).where(Conversation.status == ConversationStatus.OPEN))
+        ).all()
+        assert len(open_convs) == 1
+
+
+async def test_two_media_workers_do_not_process_same_job(postgres, monkeypatch, tmp_path):
+    settings, factory = postgres
+    service = ConversationService(settings, factory)
+    await service.import_character(7, 70, "luna.json", card_blob())
+    ctx = await service.active_context(7, 70)
+
+    async with factory.begin() as session:
+        job = MediaJob(
+            conversation_id=ctx.conversation.id,
+            character_id=ctx.character.id,
+            relationship_id=ctx.relationship.id,
+            kind=MediaJobKind.IMAGE,
+            prompt_or_text="Um teste de imagem",
+        )
+        session.add(job)
+
+    dummy_path = tmp_path / "img.png"
+    dummy_path.write_bytes(b"fake-image")
+
+    async def fake_generate_image(*args, **kwargs):
+        await asyncio.sleep(0.05)
+        return dummy_path
+
+    gw = MediaGateway(None, tmp_path)
+    monkeypatch.setattr(gw, "generate_image", fake_generate_image)
+    worker1 = MediaWorker(settings, factory, gw)
+    worker2 = MediaWorker(settings, factory, gw)
+
+    results = await asyncio.gather(worker1.run_one_pending(), worker2.run_one_pending())
+    assert sorted(results) == [False, True]
+
+    async with factory() as session:
+        jobs = (await session.scalars(select(MediaJob))).all()
+        assert len(jobs) == 1
+        assert jobs[0].status == MediaJobStatus.DONE
+        deliveries = (await session.scalars(select(PendingDelivery))).all()
+        assert len(deliveries) == 1
+        assert deliveries[0].kind == DeliveryKind.IMAGE
+        assert deliveries[0].status == DeliveryStatus.PENDING

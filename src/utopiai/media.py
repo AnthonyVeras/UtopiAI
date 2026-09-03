@@ -99,7 +99,14 @@ class MediaGateway:
 
 def _extract_image(data: dict) -> str:
     """Walk generateContent response to find the first image part with inlineData/inline_data."""
+    prompt_feedback = data.get("promptFeedback")
+    if isinstance(prompt_feedback, dict) and prompt_feedback.get("blockReason"):
+        raise MediaError(f"Prompt bloqueado por seguranca ({prompt_feedback['blockReason']})")
+
     for candidate in data.get("candidates", []):
+        finish_reason = candidate.get("finishReason")
+        if finish_reason and finish_reason not in ("STOP", "MAX_TOKENS"):
+            raise MediaError(f"Geracao interrompida ({finish_reason})")
         content = candidate.get("content", {})
         for part in content.get("parts", []):
             inline_data = part.get("inlineData") or part.get("inline_data")

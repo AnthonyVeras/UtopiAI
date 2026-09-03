@@ -143,9 +143,121 @@ async def test_generate_image_no_profile(tmp_path):
         await gw.generate_image(uuid.uuid4(), uuid.uuid4(), "test")
 
 
-def test_extract_image_missing():
-    with pytest.raises(MediaError, match="nao contem imagem"):
-        _extract_image({"candidates": [{"content": {"parts": [{"text": "no image here"}]}}]})
+def test_extract_image_safety_blocked():
+    data = {
+        "promptFeedback": {"blockReason": "SAFETY"},
+        "candidates": [],
+    }
+    with pytest.raises(MediaError, match="Prompt bloqueado por seguranca"):
+        _extract_image(data)
+
+
+def test_extract_image_finish_reason_safety():
+    data = {
+        "candidates": [
+            {
+                "finishReason": "SAFETY",
+                "content": {"parts": []},
+            }
+        ]
+    }
+    with pytest.raises(MediaError, match="Geracao interrompida"):
+        _extract_image(data)
+
+
+# --- MediaWorker failure notification ---
+
+
+@pytest.mark.asyncio
+async def test_media_worker_failure_enqueues_text_notification(tmp_path):
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from utopiai.media_worker import MediaWorker
+    from utopiai.models import (
+        Base,
+        Character,
+        Conversation,
+        DeliveryKind,
+        MediaJob,
+        MediaJobKind,
+        MediaJobStatus,
+        PendingDelivery,
+        Persona,
+        Relationship,
+        User,
+    )
+
+    db_path = tmp_path / "test.db"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory.begin() as session:
+        user_id = uuid.uuid4()
+        user = User(id=user_id)
+        session.add(user)
+        persona = Persona(id=uuid.uuid4(), user_id=user_id, name="User")
+        session.add(persona)
+        character = Character(
+            id=uuid.uuid4(),
+            owner_id=user_id,
+            name="Luna",
+            description="amiga",
+            personality="calma",
+            scenario="",
+            first_mes="oi",
+            normalized_card={},
+            original_payload={},
+            original_format="json",
+            original_file_name="card.json",
+            original_asset_path="card.json",
+        )
+        session.add(character)
+        relationship = Relationship(character_id=character.id, persona_id=persona.id)
+        session.add(relationship)
+        conversation = Conversation(
+            character_id=character.id,
+            persona_id=persona.id,
+            channel="telegram",
+            external_id="100",
+        )
+        session.add(conversation)
+        await session.flush()
+
+        job = MediaJob(
+            conversation_id=conversation.id,
+            character_id=character.id,
+            relationship_id=relationship.id,
+            kind=MediaJobKind.IMAGE,
+            prompt_or_text="retrato",
+        )
+        session.add(job)
+
+    gw = MediaGateway(None, tmp_path)
+
+    async def failing_generate_image(*args, **kwargs):
+        raise MediaError("Google AI Studio HTTP 500: internal error")
+
+    gw.generate_image = failing_generate_image
+    worker = MediaWorker(SimpleNamespace(), factory, gw)
+    did_work = await worker.run_one_pending()
+    assert did_work is True
+
+    async with factory() as session:
+        from sqlalchemy import select
+
+        jobs = (await session.scalars(select(MediaJob))).all()
+        assert len(jobs) == 1
+        assert jobs[0].status == MediaJobStatus.FAILED
+        assert "Google AI Studio HTTP 500" in (jobs[0].error or "")
+
+        deliveries = (await session.scalars(select(PendingDelivery))).all()
+        assert len(deliveries) == 1
+        assert deliveries[0].kind == DeliveryKind.TEXT
+        assert "Nao consegui gerar a imagem agora" in deliveries[0].content_path_or_text
+
+    await engine.dispose()
 
 
 def test_extract_image_inline_data_snake_case():

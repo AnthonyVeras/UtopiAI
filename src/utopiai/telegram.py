@@ -4,6 +4,7 @@ import asyncio
 import io
 import logging
 import secrets
+import sys
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,6 +29,7 @@ from utopiai.models import (
     DeliveryKind,
     DeliveryStatus,
     DreamRun,
+    DreamStatus,
     MemoryKind,
     PendingDelivery,
     Relationship,
@@ -114,6 +116,9 @@ class TelegramAdapter:
             return
         try:
             photo = update.effective_message.photo[-1]  # largest resolution
+            if photo.file_size and photo.file_size > 10 * 1024 * 1024:
+                await update.effective_message.reply_text("Arquivo acima do limite de 10 MB.")
+                return
             telegram_file = await photo.get_file()
             photo_bytes = bytes(await telegram_file.download_as_bytearray())
             caption = update.effective_message.caption or ""
@@ -280,9 +285,13 @@ class TelegramAdapter:
                 {"key": f"dream:{ctx.relationship.id}"},
             )
             run = await self.dreams.run_relationship(session, ctx.relationship, force=True)
-        await update.effective_message.reply_text(
-            run.summary if run and run.summary else "Nao havia mensagens novas para sonhar."
-        )
+        if run and run.status == DreamStatus.FAILED:
+            msg = f"Falha ao processar o sonho: {run.error or 'erro desconhecido'}"
+        elif run and run.summary:
+            msg = run.summary
+        else:
+            msg = "Nao havia mensagens novas para sonhar."
+        await update.effective_message.reply_text(msg)
 
     async def sonhos(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self.guard(update):
@@ -369,6 +378,9 @@ class TelegramAdapter:
             return
         voice = update.effective_message.voice or update.effective_message.audio
         if not voice:
+            return
+        if voice.file_size and voice.file_size > 20 * 1024 * 1024:
+            await update.effective_message.reply_text("Arquivo de audio acima do limite de 20 MB.")
             return
         try:
             telegram_file = await voice.get_file()
@@ -472,6 +484,10 @@ class TelegramAdapter:
                                 await context.bot.send_photo(chat_id=chat_id, photo=data)
                             else:
                                 delivery.status = DeliveryStatus.FAILED
+                                await context.bot.send_message(
+                                    chat_id=chat_id,
+                                    text="Nao foi possivel carregar o arquivo de imagem gerado.",
+                                )
                                 continue
                         elif delivery.kind == DeliveryKind.AUDIO:
                             path = Path(delivery.content_path_or_text)
@@ -481,6 +497,10 @@ class TelegramAdapter:
                                 await context.bot.send_voice(chat_id=chat_id, voice=data)
                             else:
                                 delivery.status = DeliveryStatus.FAILED
+                                await context.bot.send_message(
+                                    chat_id=chat_id,
+                                    text="Nao foi possivel carregar o arquivo de audio gerado.",
+                                )
                                 continue
                         elif delivery.kind == DeliveryKind.TEXT:
                             for chunk in split_text(delivery.content_path_or_text):
@@ -494,6 +514,8 @@ class TelegramAdapter:
 
 
 def main() -> None:
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     settings = Settings.load()
     configure_logging(settings.log_level)
     TelegramAdapter(settings).application().run_polling(drop_pending_updates=False)
